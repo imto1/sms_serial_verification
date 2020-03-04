@@ -1,16 +1,36 @@
-import re
-import os
-import time
-import requests
 import datetime
-from flask import Flask, flash, jsonify, request, Response, redirect, url_for, abort, render_template
-from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user, current_user
-from pandas import read_excel
+import os
+import re
+import time
+from textwrap import dedent
+
+import requests
+from flask import (
+    Flask,
+    Response,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from werkzeug.utils import secure_filename
-import MySQLdb
+
 import config
+import MySQLdb
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_login import (
+    LoginManager,
+    UserMixin,
+    current_user,
+    login_required,
+    login_user,
+    logout_user,
+)
+from pandas import read_excel
 
 app = Flask(__name__)
 limiter = Limiter(app, key_func=get_remote_address)
@@ -123,6 +143,17 @@ def login():
         return render_template('login.html')
 
 
+@app.route(f"/v1/{config.REMOTE_CALL_API_KEY}/check_one_serial/<serial>", methods=["GET"])
+def check_one_serial_api(serial):
+    """ to check whether a serial number is valid or not using api
+    caller should use something like /v1/ABCDSECRET/cehck_one_serial/AA10000
+    answer back json which is status = DOUBLE, FAILURE, OK, NOT-FOUND
+    """
+    status, answer = check_serial(serial)
+    ret = {'status': status, 'answer': answer}
+    return jsonify(ret), 200
+
+
 @app.route("/check_one_serial", methods=["POST"])
 @login_required
 def check_one_serial():
@@ -130,6 +161,75 @@ def check_one_serial():
     serial_to_check = request.form["serial"]
     status, answer = check_serial(serial_to_check)
     flash(f'{status} - {answer}', 'info')
+
+    return redirect('/')
+
+
+@app.route("/dbcheck")
+@login_required
+def db_check():
+    """ will do some sanity checks on the db and will flash the errors """
+
+    def collision(s1, e1, s2, e2):
+        if s2 <= s1 <= e2:
+            return True
+        if s2 <= e1 <= e2:
+            return True
+        if s1 <= s2 <= e1:
+            return True
+        if s1 <= e2 <= e1:
+            return True
+        return False
+
+    def separate(input_string):
+        """ gets AA0000000000000000000000000090 and returns AA, 90 """
+        digit_part = ''
+        alpha_part = ''
+        for character in input_string:
+            if character.isalpha():
+                alpha_part += character
+            elif character.isdigit():
+                digit_part += character
+        return alpha_part, int(digit_part)
+
+
+    db = get_database_connection()
+    cur = db.cursor()
+
+    cur.execute("SELECT id, start_serial, end_serial FROM serials")
+
+    raw_data = cur.fetchall()
+
+    data = {}
+    flashed = 0
+    for row in raw_data:
+        id_row, start_serial, end_serial = row
+        start_serial_alpha, start_serial_digit = separate(start_serial)
+        end_serial_alpha, end_serial_digit = separate(end_serial)
+        if start_serial_alpha != end_serial_alpha:
+            flashed += 1
+            if flashed < MAX_FLASH:
+                flash(f'start serial and end serial of row {id_row} start with different letters', 'danger')
+            elif flashed == MAX_FLASH:
+                flash('too many starts with different letters', 'danger')
+        else:
+            if start_serial_alpha not in data:
+                data[start_serial_alpha] = []
+            data[start_serial_alpha].append(
+                (id_row, start_serial_digit, end_serial_digit))
+
+    flashed = 0
+    for letters in data:
+        for i in range(len(data[letters])):
+            for j in range(i+1, len(data[letters])):
+                id_row1, ss1, es1 = data[letters][i]
+                id_row2, ss2, es2 = data[letters][j]
+                if collision(ss1, es1, ss2, es2):
+                    flashed += 1
+                    if flashed < MAX_FLASH:
+                        flash(f'there is a collision between row ids {id_row1} and {id_row2}', 'danger')
+                    elif flashed == MAX_FLASH:
+                        flash(f'Too many collisions', 'danger')
 
     return redirect('/')
 
@@ -159,6 +259,7 @@ def load_user(userid):
 
 @app.route('/v1/ok')
 def health_check():
+    """ for system health check. calling it will answer with json message: ok """
     ret = {'message': 'ok'}
     return jsonify(ret), 200
 
@@ -181,36 +282,36 @@ def send_sms(receptor, message):
     print(f"message *{message}* sent. status code is {res.status_code}")
 
 
+def _remove_non_alphanum_char(string):
+    return re.sub(r'\W+', '', string)
+
+
+def _translate_numbers(current, new, string):
+    translation_table = str.maketrans(current, new)
+    return string.translate(translation_table)
+
 def normalize_string(serial_number, fixed_size=30):
     """ gets a serial number and standardize it as following:
     >> converts(removes others) all chars to English upper letters and numbers
     >> adds zeros between letters and numbers to make it fixed length """
-    # remove any non-alphanumeric character
-    serial_number = re.sub(r'\W+', '', serial_number)
+
+    serial_number = _remove_non_alphanum_char(serial_number)
     serial_number = serial_number.upper()
 
-    # replace persian and arabic numeric chars to standard format
-    from_persian_char = '۱۲۳۴۵۶۷۸۹۰'
-    from_arabic_char = '١٢٣٤٥٦٧٨٩٠'
-    to_char = '1234567890'
-    for i in range(len(to_char)):
-        serial_number = serial_number.replace(from_persian_char[i], to_char[i])
-        serial_number = serial_number.replace(from_arabic_char[i], to_char[i])
+    persian_numerals = '۱۲۳۴۵۶۷۸۹۰'
+    arabic_numerals = '١٢٣٤٥٦٧٨٩٠'
+    english_numerals = '1234567890'
 
-    # separate the alphabetic and numeric part of the serial number
-    all_alpha = ''
-    all_digit = ''
-    for c in serial_number:
-        if c.isalpha():
-            all_alpha += c
-        elif c.isdigit():
-            all_digit += c
+    serial_number = _translate_numbers(persian_numerals, english_numerals, serial_number)
+    serial_number = _translate_numbers(arabic_numerals, english_numerals, serial_number)
 
-    # add zeros between alphabetic and numeric parts to standardaize the length of the serial number
-    missing_zeros = fixed_size - len(all_alpha) - len(all_digit)
-    serial_number = all_alpha + '0' * missing_zeros + all_digit
+    all_digit = "".join(re.findall("\d", serial_number))
+    all_alpha = "".join(re.findall("[A-Z]", serial_number))
 
-    return serial_number
+    missing_zeros = "0" * (fixed_size - len(all_alpha + all_digit))
+
+    return f"{all_alpha}{missing_zeros}{all_digit}"
+
 
 
 def import_database_from_excel(filepath):
@@ -268,7 +369,7 @@ def import_database_from_excel(filepath):
                     'danger')
             elif total_flashes == MAX_FLASH:
                 flash(f'Too many errors!', 'danger')
-        if line_number % 20 == 0:
+        if line_number % 1000 == 0:
             try:
                 db.commit()
             except Exception as e:
@@ -303,7 +404,7 @@ def import_database_from_excel(filepath):
             elif total_flashes == MAX_FLASH:
                 flash(f'Too many errors!', 'danger')
 
-        if line_number % 20 == 0:
+        if line_number % 1000 == 0:
             try:
                 db.commit()
             except Exception as e:
@@ -326,21 +427,23 @@ def check_serial(serial):
     with db.cursor() as cur:
         results = cur.execute("SELECT * FROM invalids WHERE invalid_serial = %s", (serial,))
         if results > 0:
-            answer = f'''{original_serial}
-    این شماره هولوگرام یافت نشد. لطفا دوباره سعی کنید  و یا با واحد پشتیبانی تماس حاصل فرمایید.
-    ساختار صحیح شماره هولوگرام بصورت دو حرف انگلیسی و 7 یا 8 رقم در دنباله آن می باشد. مثال:
-    FA1234567
-    شماره تماس با بخش پشتیبانی فروش شرکت التک:
-    021-22038385'''
+            answer = dedent(f"""\
+                {original_serial}
+                این شماره هولوگرام یافت نشد. لطفا دوباره سعی کنید  و یا با واحد پشتیبانی تماس حاصل فرمایید.
+                ساختار صحیح شماره هولوگرام بصورت دو حرف انگلیسی و 7 یا 8 رقم در دنباله آن می باشد. مثال:
+                FA1234567
+                شماره تماس با بخش پشتیبانی فروش شرکت التک:
+                021-22038385""")
 
             return 'FAILURE', answer
 
         results = cur.execute("SELECT * FROM serials WHERE start_serial <= %s and end_serial >= %s", (serial, serial))
         if results > 1:
-            answer = f'''{original_serial}
-    این شماره هولوگرام مورد تایید است.
-    برای اطلاعات بیشتر از نوع محصول با بخش پشتیبانی فروش شرکت التک تماس حاصل فرمایید:
-    021-22038385'''
+            answer = dedent(f"""\
+                {original_serial}
+                این شماره هولوگرام مورد تایید است.
+                برای اطلاعات بیشتر از نوع محصول با بخش پشتیبانی فروش شرکت التک تماس حاصل فرمایید:
+                021-22038385""")
             return 'DOUBLE', answer
         elif results == 1:
             ret = cur.fetchone()
@@ -348,22 +451,24 @@ def check_serial(serial):
             ref_number = ret[1]
             date = ret[5].date()
             print(type(date))
-            answer = f'''{original_serial}
-    {ref_number}
-    {desc}
-    Hologram date: {date}
-    Genuine product of Schneider Electric
-    شماره تماس با بخش پشتیبانی فروش شرکت التک:
-    021-22038385'''
+            answer = dedent(f"""\
+                {original_serial}
+                {ref_number}
+                {desc}
+                Hologram date: {date}
+                Genuine product of Schneider Electric
+                شماره تماس با بخش پشتیبانی فروش شرکت التک:
+                021-22038385""")
             return 'OK', answer
 
 
-    answer = f'''{original_serial}
-    این شماره هولوگرام یافت نشد. لطفا دوباره سعی کنید  و یا با واحد پشتیبانی تماس حاصل فرمایید.
-    ساختار صحیح شماره هولوگرام بصورت دو حرف انگلیسی و 7 یا 8 رقم در دنباله آن می باشد. مثال:
-    FA1234567
-    شماره تماس با بخش پشتیبانی فروش شرکت التک:
-    021-22038385'''
+    answer = dedent(f"""\
+        {original_serial}
+        این شماره هولوگرام یافت نشد. لطفا دوباره سعی کنید  و یا با واحد پشتیبانی تماس حاصل فرمایید.
+        ساختار صحیح شماره هولوگرام بصورت دو حرف انگلیسی و 7 یا 8 رقم در دنباله آن می باشد. مثال:
+        FA1234567
+        شماره تماس با بخش پشتیبانی فروش شرکت التک:
+        021-22038385""")
 
     return 'NOT-FOUND', answer
 
@@ -401,11 +506,28 @@ def page_not_found(error):
     return render_template('404.html'), 404
 
 
+
+def create_sms_table():
+    """Ctreates PROCESSED_SMS table on database if it's not exists."""
+
+    db = get_database_connection()
+
+    cur = db.cursor()
+
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS PROCESSED_SMS (
+            status ENUM('OK', 'FAILURE', 'DOUBLE', 'NOT-FOUND'),
+            sender CHAR(20),
+            message VARCHAR(400),
+            answer VARCHAR(400),
+            date DATETIME, INDEX(date, status));""")
+        db.commit()
+    except Exception as e:
+        flash(f'Error creating PROCESSED_SMS table; {e}', 'danger')
+        
+    db.close()
+
+
 if __name__ == "__main__":
-    #import_database_from_excel('../data.xlsx')
-    #process('sender', 'JJ1000000')
-    #process('sender', 'JM101')
-    #process('sender', 'JJ101')
-    #process('sender', 'chert')
-    #process('sender', 'JM199')
-    app.run("0.0.0.0", 5000, debug=True)
+    create_sms_table()
+    app.run("0.0.0.0", 5000, debug=False)

@@ -1,5 +1,18 @@
 # sms_verification
-This project is done for Altech as a educational series.
+
+This project is done for Altech (Schneider Electric Iran) as an educational series. 
+
+این پروژه ای است به سفارش آلتک (اشنایدر الکتریک ایران) برای سنجش صحت شماره سریال ها با پیامک. من پروژه رو ازشون قبول کردم به این شرط که همه مراحلش رو ضبط و منتشر کنم تا نمونه ای باشه از انجام یک پروژه واقعی توسط یک فری لنسر. در این پروژه از تکنولوژی های زیر استفاده می شه:
+
+- پایتون
+- فلسک
+- ای پی آی های دریافت و ارسال اسمس از درگاه پیامک کاوه نگار
+- پاس فندق
+- مای اسکوئل
+
+کل ویدئوها رو می تونین از لینک های زیر ببینین.
+
+Every single step of this project is screen captures and you can follow them [On youtube](https://www.youtube.com/playlist?list=PL-tKrPVkKKE1vAT_rgjnvL_RgFUI9oJ9a) or [On Aparat](https://www.aparat.com/v/fAZSV?playlist=288572). 
 
 ## How to run
 1. Install python3, pip3, virtualenv, MySQL in your system.
@@ -11,49 +24,11 @@ This project is done for Altech as a educational series.
 7. From the project folder, install packages using `pip install -r requirements.txt`
 8. Now environment is ready. Run it by `python app/main.py`
 
-### Or you can use Dockerfile 
+## Example of creating db and granting access:
+```
+CREATE DATABASE smsmysql;
+USE smsmysql;
+CREATE USER 'smsmysql'@'localhost' IDENTIFIED BY 'test' PASSWORD NEVER EXPIRE;
+GRANT ALL PRIVILEGES ON smsmysql.* TO 'smsmysql'@'localhost';
+```
 
-## TODO
-- [x] Farhad seifi https://ngrok.com/
-- [x] add db path to config.py.sample
-- [x] do more while normalizing, specially against SQLInjection. remove all non alpha numerical
-- [x] some health check url
-- [x] there is problem with JJ1000000 and JJ100
-- [x] create requirements.txt (pip freeze)
-- [x] the insert will fail if there is a ' or " in excel file
-- [x] another 10 % problem :D
-- [x] refactor name str in normalize function
-- [x] in normalize, convert AB001 to AB00001 (max len? say 15)
-- [x] dockerize (alpine? search for uwsgi)
-- [x] merge pull requests.. check I mean :)
-- [x] do proper inserts with INTO
-- [x] templating
-- [x] thanks H shafiee
-- [x] rate limit
-- [x] add call back token on kavenegar site
-- [x] we do not normalize the failed serials when importing!
-- [x] invalids can have duplicates
-- [x] migrate to mysql
-- [x] if we have 2 matches on serials, regurn a general OK message
-- [x] add altech logo from Downloads/logo.png ; top left
-- [x] close db connection in check_serial
-- [x] count the failed insertions in db
-- [x] regenerate requirements.txt with MySQLdb
-- [x] proper texts are provided in Downloads/sms_reply_texts
-- [x] is it possible to check a serial from the gui?
-- [x] dummy message for end to end test via SMS
-- [x] log all incomming smss
-- [x] Atomic problem when I'm commiting every 10 inserts
-- [x] show smss at the bottom of the Dashboard
-- [x] define indexes on mysql
-- [x] trim too long sms input
-- [x] add some nubmer to the cards
-- [x] fix line 83 and 86 :D
-- [x] are we counting inserts correctly?! :D after the merge 
-- [x] Kavenegar tell which IPs they use on their admin GUI, be we already implemented another solution
-- [x] show Exception errors
-- [x] message and answer fields should be rtl
-- [x] is it a good idea to insert rows one by one? not sure. but... what to do :| say 100?
-- [ ] remove debug mode
-- [ ] fix page titles
-- [ ] a way for restful authentication
